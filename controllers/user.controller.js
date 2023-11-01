@@ -1,5 +1,8 @@
 import User from "../models/user.model.js";
 import AppError from "../utils/error.util.js";
+import cloudinary from "cloudinary";
+import fs from "fs/promises"
+import sendEmail from "../utils/sendEmail.js";
 
 const cookieOptions = {
   maxAge: 7 * 24 * 60 * 60 * 1000,
@@ -13,10 +16,6 @@ const register = async (req, res, next) => {
     const { fullName, email, password } = req.body;
   if (!fullName || !email || !password) {
     return next(new AppError('All fields are required', 400));
-    // res.status(400).json({
-    //   success: false,
-    //   message: 'All fields are required'
-    // })
   }
 
   const userExists = await User.findOne({ email });
@@ -40,6 +39,36 @@ const register = async (req, res, next) => {
   }
 
   //TODO: File upload
+  console.log(req.file)
+  if(req.file) {
+    try {
+      const result = await cloudinary.v2.uploader.upload( req.file.path, {
+        folder: 'lms',
+        width: 250,
+        height: 250,
+        gravity: 'faces',
+        crop: 'fill'
+      });
+
+      if(result){
+        user.avatar.public_id = result.public_id;
+        user.avatar.secure_url = result.secure_url;
+
+        //remove files
+      
+        fs.rm(`uploads/${req.file.filename}`)
+
+      }
+
+
+    } catch (error) {
+      
+      return next( new AppError(error.message || 'File not uploaded, please try again', 500))
+
+    }
+  }
+
+
 
   await user.save();
 
@@ -97,7 +126,7 @@ const login = async (req, res, next) => {
 
 
 };
-const logout = (req, res) => {
+const logout = (req, res , next) => {
   try {
     res.cookie('token', null, {
       secure: true,
@@ -114,7 +143,7 @@ const logout = (req, res) => {
   }
 }; 
 
-const getProfile = async(req, res) => {
+const getProfile = async(req, res, next) => {
 
   try{
     const userId = req.user.id;
@@ -131,9 +160,57 @@ const getProfile = async(req, res) => {
 
 };
 
+
+const forgotPassword = async(req, res, next) => {
+
+  const {email} = req.body;
+  if(!email){
+    return next(new AppError('Email is required', 400))
+  }
+
+  const user = await User.findOne({email});
+  if(!user){
+    return next(new AppError('Email not registered', 400))
+  }
+
+  const resetToken = await user.generatePasswordResetToken();
+
+  await user.save();
+
+  const resetPasswordURL = `${process.env.FRONTEND_URL}/reset-password/${resetToken}`
+
+   
+   const subject = 'Reset Password'
+   const message=`You can reset your password by clicking <a href = ${resetPasswordURL} target ="_blank">Reset your password</a>\nIf the above link does not work for some reason then copy paste this link in new tab ${resetPasswordURL}.\n If you have not requested this , kindly ignore. `;
+
+   
+  try{
+    await sendEmail(email, subject, message);
+    res.status(200).json({
+      success:true,
+      message: `Reset password token has been sent to ${email} successfully`
+    })
+  } catch(error){
+
+    user.forgotPasswordExpir = undefined;
+    user.forgotPasswordToken = undefined;
+    
+    await user.save();
+
+    return next( new AppError(error.message,500))
+  }
+
+}
+
+const resetPassword = (req, res) => {
+  
+}
+
 export {
   register,
   login,
   logout,
-  getProfile
+  getProfile,
+  forgotPassword,
+  resetPassword  
 }
