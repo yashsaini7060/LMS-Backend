@@ -3,7 +3,7 @@ import AppError from "../utils/error.util.js";
 import cloudinary from "cloudinary";
 import fs from "fs/promises"
 import sendEmail from "../utils/sendEmail.js";
-
+import crypto from "crypto";
 const cookieOptions = {
   maxAge: 7 * 24 * 60 * 60 * 1000,
   httpOnly: true,
@@ -103,10 +103,9 @@ const login = async (req, res, next) => {
       email
     }).select('+password');
 
-    if (!user || !user.comparePassword(password)) {
-      return next(new AppError('Email or password does not match', 400))
+    if (!(user && await user.comparePassword(password))) {
+      return next(new AppError('Email or password does not match or user does not exist', 400))
     }
-
     const token = await user.genreateJWTToken();
     user.password = undefined;
     res.cookie('token', token, cookieOptions)
@@ -126,6 +125,7 @@ const login = async (req, res, next) => {
 
 
 };
+
 const logout = (req, res , next) => {
   try {
     res.cookie('token', null, {
@@ -176,9 +176,9 @@ const forgotPassword = async(req, res, next) => {
   const resetToken = await user.generatePasswordResetToken();
 
   await user.save();
-
+  
   const resetPasswordURL = `${process.env.FRONTEND_URL}/reset-password/${resetToken}`
-
+  console.log(resetPasswordURL);
    
    const subject = 'Reset Password'
    const message=`You can reset your password by clicking <a href = ${resetPasswordURL} target ="_blank">Reset your password</a>\nIf the above link does not work for some reason then copy paste this link in new tab ${resetPasswordURL}.\n If you have not requested this , kindly ignore. `;
@@ -202,8 +202,119 @@ const forgotPassword = async(req, res, next) => {
 
 }
 
-const resetPassword = (req, res) => {
+const resetPassword = async (req, res, next) => {
+  const {resetToken} = req.params;
+  const {password} = req.body;  
+  const forgotPasswordToken = crypto
+    .createHash('sha256')
+    .update(resetToken)
+    .digest('hex');
+
+  console.log(forgotPasswordToken)
+  const user = await User.findOne({
+    forgotPasswordToken,
+    forgotPasswordExpiry: {$gt: Date.now()}
+  });
+
+  if(!user){
+    return next(
+      new AppError('Token is invalid or expired, please try again', 400)
+    )
+  }
+
+  user.password = password;
+  user.forgotPasswordExpiry = undefined;
+  user.forgotPasswordToken = undefined;
+  user.save();
+
+  res.status(200).json({
+    success: true,
+    message: 'Password changed successfully!!'
+  })
+}
+
+const changePassword  = async (req, res, next) => {
+
+  const {oldPassword, newPassword} = req.body;
+  const {id} = req.user;
+  if(!oldPassword || !newPassword){
+    return next(new AppError('All fields are required', 400))
+  }
+
+  const user = await User.findById(id).select('+password');
+
+  if(!user){
+    return next(new AppError('User not found', 400))
+  }
+
+  const isPasswordValid = await user.comparePassword(oldPassword);
+
+  if(!isPasswordValid){
+    return next(new AppError('Old password is incorrect', 400))
+  }
   
+  user.password = newPassword;
+  await user.save();
+  user.password = undefined;
+  res.status(200).json({
+    success: true,
+    message: 'Password changed successfully',
+  })
+
+}
+
+
+const updateUser = async(req, res, next) => {
+
+  const {fullName} = req.body;
+  console.log(fullName);
+  const {id} = req.params;
+
+  const user = await User.findById(id);
+
+  if(!user){
+    return next(new AppError('User not found', 400));
+  }
+
+  user.fullName = fullName;
+
+  if(req.file) {
+    await cloudinary.v2.uploader.destroy(user.avatar.public_id);
+    try {
+      const result = await cloudinary.v2.uploader.upload( req.file.path, {
+        folder: 'lms',
+        width: 250,
+        height: 250,
+        gravity: 'faces',
+        crop: 'fill'
+      });
+
+      if(result){
+        user.avatar.public_id = result.public_id;
+        user.avatar.secure_url = result.secure_url;
+
+        //remove files
+      
+        fs.rm(`uploads/${req.file.filename}`)
+
+      }
+
+
+    } catch (error) {
+      
+      return next( new AppError(error.message || 'File not uploaded, please try again', 500))
+
+    }
+  }
+
+  await user.save();
+
+  res.status(200).json({
+    success: true,
+    message: 'User updated successfully',
+  });
+
+
 }
 
 export {
@@ -212,5 +323,7 @@ export {
   logout,
   getProfile,
   forgotPassword,
-  resetPassword  
+  resetPassword ,
+  changePassword,
+  updateUser 
 }

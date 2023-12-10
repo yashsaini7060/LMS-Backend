@@ -59,7 +59,7 @@ userSchema.pre('save', async function(next) {
 
 userSchema.methods= {
   genreateJWTToken: async function() {
-    return await jwt.sign({id: this._id, email: this.email, subscription: this.subscription},
+    return await jwt.sign({id: this._id, role: this.role, email: this.email, subscription: this.subscription},
       process.env.JWT_SECRET, 
       {expiresIn: process.env.JWT_EXPIRY })
   
